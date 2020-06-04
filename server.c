@@ -13,13 +13,11 @@
 #include <string.h>
 #include <fcntl.h>
 
-#define BUF_SIZE 2048
-#define RES_SIZE 2048
+#define BUF_SIZE 65536
 
 int sockfd; //descriptors rturn from socket and accept system calls
-char buffer[BUF_SIZE];
-FILE *log_file;
-const char *not_found_filename = "404.html";
+FILE *log_file; // 디버깅용 출력을 작성하는 로그 파일
+const char *not_found_filename = "404.html"; // 서버에 해당 파일이 없을 때 대신 보낼 html 파일
 
 typedef enum _request_method{
     GET = 0,
@@ -43,17 +41,6 @@ typedef enum _header_type {
     UPGRADE_INSECURE_REQUEST,
     CACHE_CONTROL
 } header_type;
-typedef struct _mime_type {
-    int type;
-    int subtype;
-    int charset;
-    int boundary;
-    float quality;
-} mime_type;
-
-// TODO : accept, accept_language등을 따로 정의한 구조체를 사용하여 저장하기
-// && 이를 사용하는 부분들도 변경하기
-
 typedef struct _request {
     request_method method;
     char *filename;
@@ -76,8 +63,7 @@ void error(char *msg);
 void my_handler(int signum);
 
 int main(int argc, char *argv[]) {
-    int newsockfd;
-    int portno; // port number
+    int portno;
     request *req;
     socklen_t clilen;
 
@@ -86,14 +72,16 @@ int main(int argc, char *argv[]) {
 
     struct sigaction act;
 
+    // 서버가 ctrl+c로 종료되어도 정상적으로 소켓을 닫을 수 있도록 sigaction을 설정해준다
     act.sa_handler = my_handler;
     act.sa_flags = 0;
     sigemptyset(&act.sa_mask);
     sigaction(SIGINT, &act, NULL);
 
+    // 디버깅을 위한 로그 파일을 연다
     log_file = fopen("log.txt", "w");
-    // log_file = stderr;
 
+    // port 를 받지 못했다면 프로그램을 종료시킨다
     if (argc < 2)
         error("ERROR, no port provided\n");
     
@@ -104,6 +92,7 @@ int main(int argc, char *argv[]) {
     if (sockfd < 0) 
         error("ERROR opening socket");
     
+    // serv_addr 구조체를 초기화하고 알맞은 값을 채워넣는다
     bzero((char *) &serv_addr, sizeof(serv_addr));
     portno = atoi(argv[1]); //atoi converts from String to Integer
     serv_addr.sin_family = AF_INET;
@@ -113,25 +102,24 @@ int main(int argc, char *argv[]) {
     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) //Bind the socket to the server address
         error("ERROR on binding");
     
+    // loop를 돌면서 클라이언트의 연결 요청을 읽는다
     while (1) {
         listen(sockfd,5); // Listen for socket connections. Backlog queue (connections to wait) is 5
         
+        // 클라이언트와 통신할 용도의 소켓을 새로 연결한다.
         clilen = sizeof(cli_addr);
-        /*accept function: 
-        1) Block until a new connection is established
-        2) the new socket descriptor will be used for subsequent communication with the newly connected client.
-        */
-        newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+        int newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
         if (newsockfd < 0) 
             error("ERROR on accept");
 
-        // parse request string;
-        // response문자열이 들어갈 배열과 request구조체
+        // request 구조체를 초기화하고 클라이언트가 보낸 request를 받는다
         req = malloc(sizeof(request));
-
         get_request(newsockfd, req);
+
+        // 클라이언트에게서 받은 request를 바탕으로 response를 작성하고 클라이언트에게 보낸다
         send_response(newsockfd, req);
         
+        // 다음 request를 위해 메모리 할당을 풀어준다
         free(req);
         close(newsockfd);
     }
@@ -148,14 +136,17 @@ void error(char *msg) {
 void my_handler(int signum) {
     close(sockfd);
     fclose(log_file);
-    error("server terminated by signal");
+    fprintf(stderr, "server terminated by signal\n");
+    exit(0);
 }
 int get_request(int socketfd, request *req) {
     int i, n, cursor;
+    char buffer[BUF_SIZE];
     char parse_buffer[1024], *tmp;
     req_get_state state;
     header_type h_type;
 
+    // 버퍼를 비우고 소켓에서 request 를 읽어 버퍼에 넣는다
     bzero(buffer, BUF_SIZE); // buffer를 비운다
     n = read(socketfd, buffer, BUF_SIZE-1);
     if (n < 0) error("ERROR reading from socket");
@@ -264,9 +255,9 @@ int get_request(int socketfd, request *req) {
                 default:
                     break;
                 }
-                state = GET_HEADER_TYPE;
-                i++;
-                cursor = i+1;
+                state = GET_HEADER_TYPE; // 상태를 헤더 타입을 읽는 상태로 변경
+                i++; // 뒤의 \n 문자는 넘어간다
+                cursor = i+1; // 커서를 헤더 타입의 처음에 논다
             }
             break;
         
@@ -283,7 +274,7 @@ int send_response(int socketfd, request *req) {
     int n, content_buffer_size;
     int content_file;
     char *content_buffer;
-    char response[RES_SIZE], content_length[30], content_type[50];
+    char content_length[30], content_type[50];
 
     // 요청한 파일을 연다
     fprintf(log_file, "open %s file\n", req->filename);
@@ -303,7 +294,6 @@ int send_response(int socketfd, request *req) {
             content_buffer_size = lseek(content_file, 0, SEEK_END);
             sprintf(content_length, "%d", content_buffer_size);
             content_buffer = malloc(sizeof(char)*(content_buffer_size+1));
-            printf("%d\n", content_buffer_size);
 
             lseek(content_file, 0, SEEK_SET);
             n = read(content_file, content_buffer, content_buffer_size);
@@ -329,7 +319,6 @@ int send_response(int socketfd, request *req) {
         content_buffer_size = lseek(content_file, 0, SEEK_END);
         sprintf(content_length, "%d", content_buffer_size);
         content_buffer = malloc(sizeof(char)*(content_buffer_size+1));
-        printf("%d\n", content_buffer_size);
 
         // content를 읽어 버퍼에 저장한다
         lseek(content_file, 0, SEEK_SET);
@@ -374,6 +363,7 @@ int send_response(int socketfd, request *req) {
 }
 int write_res_header(int socketfd, char *type, char *value, char *t) {
     int n;
+    //헤더 타입, 값을 클라이언트에게 보낸다
     n = write(socketfd, type, strlen(type));
         if (n < 0) error("ERROR writing to socket");
     n = write(socketfd, t, strlen(t));
