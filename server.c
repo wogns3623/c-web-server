@@ -64,6 +64,7 @@ void my_handler(int signum);
 
 int main(int argc, char *argv[]) {
     int portno;
+    int newsockfd;
     request *req;
     socklen_t clilen;
 
@@ -108,7 +109,7 @@ int main(int argc, char *argv[]) {
         
         // 클라이언트와 통신할 용도의 소켓을 새로 연결한다.
         clilen = sizeof(cli_addr);
-        int newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+        newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
         if (newsockfd < 0) 
             error("ERROR on accept");
 
